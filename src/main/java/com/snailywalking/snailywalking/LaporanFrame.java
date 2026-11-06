@@ -1,10 +1,14 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.text.NumberFormat;
+import java.util.List;
 import java.util.Locale;
+
+import org.hibernate.Session;
 
 public class LaporanFrame extends JPanel {
 
@@ -156,6 +160,7 @@ public class LaporanFrame extends JPanel {
         perbaruiLaporan();
     }
 
+    // MEMBUAT KARTU RINGKASAN
     private JPanel buatKartu(
             String judul,
             JLabel nilai,
@@ -184,45 +189,79 @@ public class LaporanFrame extends JPanel {
         return kartu;
     }
 
-    // MEMPERBARUI LAPORAN DARI DATASTORE
+    // MEMPERBARUI LAPORAN DARI MYSQL
     public void perbaruiLaporan() {
 
-        // Total pendapatan penjualan
-        totalPenjualan.setText(
-                formatRupiah.format(DataStore.getTotalPenjualan())
-        );
-
-        // Total pengeluaran pembelian
-        totalPembelian.setText(
-                formatRupiah.format(DataStore.getTotalPembelian())
-        );
-
-        // Total stok fisik yang tersedia
-        jumlahTersedia.setText(
-                DataStore.getTotalStok() + " Topi"
-        );
-
-        // Jumlah transaksi penjualan
-        jumlahTerjual.setText(
-                DataStore.getJumlahTransaksiPenjualan() + " Transaksi"
-        );
-
-        // Kosongkan tabel sebelum memuat ulang
         model.setRowCount(0);
 
-        // Tampilkan transaksi terbaru di baris paling atas
-        for (int i = DataStore.daftarPenjualan.size() - 1; i >= 0; i--) {
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
 
-            DataStore.Penjualan p = DataStore.daftarPenjualan.get(i);
+            // TOTAL PENJUALAN
+            Double penjualan = session.createQuery(
+                    "SELECT SUM(p.hargaJual) FROM PenjualanEntity p",
+                    Double.class
+            ).getSingleResult();
 
-            model.addRow(new Object[]{
-                p.kode,
-                p.tanggal,
-                p.kodeTopi,
-                p.namaPembeli,
-                formatRupiah.format(p.hargaJual),
-                p.metode
-            });
+            totalPenjualan.setText(
+                    formatRupiah.format(penjualan == null ? 0 : penjualan)
+            );
+
+            // TOTAL PEMBELIAN
+            Double pembelian = session.createQuery(
+                    "SELECT SUM(p.jumlah * p.hargaModal) "
+                    + "FROM PembelianEntity p",
+                    Double.class
+            ).getSingleResult();
+
+            totalPembelian.setText(
+                    formatRupiah.format(pembelian == null ? 0 : pembelian)
+            );
+
+            // TOTAL STOK TERSEDIA
+            Long stok = session.createQuery(
+                    "SELECT SUM(t.stok) FROM TopiEntity t",
+                    Long.class
+            ).getSingleResult();
+
+            jumlahTersedia.setText(
+                    (stok == null ? 0 : stok) + " Topi"
+            );
+
+            // JUMLAH TRANSAKSI PENJUALAN
+            Long jumlahTransaksi = session.createQuery(
+                    "SELECT COUNT(p) FROM PenjualanEntity p",
+                    Long.class
+            ).getSingleResult();
+
+            jumlahTerjual.setText(
+                    jumlahTransaksi + " Transaksi"
+            );
+
+            // RIWAYAT PENJUALAN TERBARU
+            List<PenjualanEntity> daftarPenjualan =
+                    session.createQuery(
+                            "FROM PenjualanEntity "
+                            + "ORDER BY tanggal DESC, kode DESC",
+                            PenjualanEntity.class
+                    ).getResultList();
+
+            for (PenjualanEntity p : daftarPenjualan) {
+                model.addRow(new Object[]{
+                    p.getKode(),
+                    p.getTanggal(),
+                    p.getKodeTopi(),
+                    p.getNamaPembeli(),
+                    formatRupiah.format(p.getHargaJual()),
+                    p.getMetode()
+                });
+            }
+
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal memuat laporan: " + e.getMessage()
+            );
+            e.printStackTrace();
         }
     }
 }

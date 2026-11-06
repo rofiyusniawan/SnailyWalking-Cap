@@ -1,19 +1,20 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.text.NumberFormat;
-import java.util.Locale;
+import java.time.LocalDate;
+import java.util.List;
+
+import org.hibernate.Session;
+import org.hibernate.Transaction;
 
 public class PenjualanFrame extends JPanel {
 
     private final DefaultTableModel model;
     private final JTable table;
     private final Runnable onKembali;
-
-    private final NumberFormat rupiah =
-            NumberFormat.getCurrencyInstance(new Locale("id", "ID"));
 
     public PenjualanFrame(Runnable onKembali) {
         this.onKembali = onKembali;
@@ -33,7 +34,6 @@ public class PenjualanFrame extends JPanel {
         title.setFont(new Font("SansSerif", Font.BOLD, 24));
 
         header.add(title, BorderLayout.WEST);
-
         add(header, BorderLayout.NORTH);
 
         // TABEL
@@ -85,37 +85,51 @@ public class PenjualanFrame extends JPanel {
 
         add(buttons, BorderLayout.SOUTH);
 
-        // TAMPILKAN DATA BERSAMA
+        // TAMPILKAN DATA DARI DATABASE
         muatData();
     }
 
-    // MEMUAT DATA DARI DATASTORE
+    // MEMUAT DATA PENJUALAN DARI MYSQL
     private void muatData() {
         model.setRowCount(0);
 
-        for (DataStore.Penjualan p : DataStore.daftarPenjualan) {
-            model.addRow(new Object[]{
-                p.kode,
-                p.tanggal,
-                p.kodeTopi,
-                p.namaPembeli,
-                p.hargaJual,
-                p.metode
-            });
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
+
+            List<PenjualanEntity> daftarPenjualan =
+                    session.createQuery(
+                            "FROM PenjualanEntity ORDER BY kode",
+                            PenjualanEntity.class
+                    ).getResultList();
+
+            for (PenjualanEntity p : daftarPenjualan) {
+                model.addRow(new Object[]{
+                    p.getKode(),
+                    p.getTanggal(),
+                    p.getKodeTopi(),
+                    p.getNamaPembeli(),
+                    p.getHargaJual(),
+                    p.getMetode()
+                });
+            }
+
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal memuat data penjualan: " + e.getMessage()
+            );
+            e.printStackTrace();
         }
     }
 
     // TAMBAH PENJUALAN
     private void tambahPenjualan() {
         JTextField kode = new JTextField();
-        JTextField tanggal = new JTextField(
-                java.time.LocalDate.now().toString()
-        );
+        JTextField tanggal = new JTextField(LocalDate.now().toString());
         JTextField kodeTopi = new JTextField();
         JTextField namaPembeli = new JTextField();
         JTextField hargaJual = new JTextField();
-        String[] metode = {"COD", "JNE"};
 
+        String[] metode = {"COD", "JNE"};
         JComboBox<String> pilihanMetode = new JComboBox<>(metode);
 
         Object[] fields = {
@@ -138,6 +152,8 @@ public class PenjualanFrame extends JPanel {
             return;
         }
 
+        Transaction transaction = null;
+
         try {
             String k = kode.getText().trim();
             String t = tanggal.getText().trim();
@@ -147,7 +163,8 @@ public class PenjualanFrame extends JPanel {
             String m = pilihanMetode.getSelectedItem().toString();
 
             if (k.isEmpty() || t.isEmpty() || kt.isEmpty()
-                    || np.isEmpty() || harga <= 0) {
+                    || np.isEmpty() || harga <= 0
+                    || !Double.isFinite(harga)) {
                 JOptionPane.showMessageDialog(
                         this,
                         "Semua data harus diisi dan harga harus lebih dari 0."
@@ -155,31 +172,60 @@ public class PenjualanFrame extends JPanel {
                 return;
             }
 
-            if (!t.matches("\\d{4}-\\d{2}-\\d{2}")) {
-                JOptionPane.showMessageDialog(
-                        this,
-                        "Format tanggal harus YYYY-MM-DD."
-                );
-                return;
-            }
+            LocalDate.parse(t);
 
-            // CEK TANGGAL VALID
-            java.time.LocalDate.parse(t);
+            try (Session session = HibernateUtil.getSessionFactory().openSession()) {
+                transaction = session.beginTransaction();
 
-            // CEK KODE DUPLIKAT
-            for (DataStore.Penjualan p : DataStore.daftarPenjualan) {
-                if (p.kode.equalsIgnoreCase(k)) {
+                // CEK KODE PENJUALAN DUPLIKAT
+                Long jumlah = session.createQuery(
+                        "SELECT COUNT(p) FROM PenjualanEntity p "
+                        + "WHERE LOWER(p.kode) = LOWER(:kode)",
+                        Long.class
+                ).setParameter("kode", k).getSingleResult();
+
+                if (jumlah > 0) {
+                    transaction.rollback();
                     JOptionPane.showMessageDialog(
                             this,
                             "Kode penjualan sudah digunakan."
                     );
                     return;
                 }
-            }
 
-            DataStore.daftarPenjualan.add(
-                    new DataStore.Penjualan(k, t, kt, np, harga, m)
-            );
+                // CEK TOPI DAN STOK
+                TopiEntity topi = session.get(TopiEntity.class, kt);
+
+                if (topi == null) {
+                    transaction.rollback();
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Kode topi tidak ditemukan."
+                    );
+                    return;
+                }
+
+                if (topi.getStok() <= 0) {
+                    transaction.rollback();
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Stok topi sudah habis."
+                    );
+                    return;
+                }
+
+                // KURANGI STOK
+                topi.setStok(topi.getStok() - 1);
+
+                // SIMPAN TRANSAKSI
+                PenjualanEntity data = new PenjualanEntity(
+                        k, t, kt, np, harga, m
+                );
+
+                session.persist(data);
+
+                transaction.commit();
+            }
 
             muatData();
 
@@ -189,15 +235,24 @@ public class PenjualanFrame extends JPanel {
             );
 
         } catch (NumberFormatException ex) {
+            rollback(transaction);
             JOptionPane.showMessageDialog(
                     this,
                     "Harga jual harus berupa angka."
             );
         } catch (java.time.DateTimeException ex) {
+            rollback(transaction);
             JOptionPane.showMessageDialog(
                     this,
-                    "Tanggal tidak valid."
+                    "Tanggal tidak valid. Gunakan format YYYY-MM-DD."
             );
+        } catch (Exception ex) {
+            rollback(transaction);
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal menambahkan penjualan: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
@@ -215,52 +270,53 @@ public class PenjualanFrame extends JPanel {
 
         String kodeLama = model.getValueAt(baris, 0).toString();
 
-        DataStore.Penjualan data = null;
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
 
-        for (DataStore.Penjualan p : DataStore.daftarPenjualan) {
-            if (p.kode.equals(kodeLama)) {
-                data = p;
-                break;
+            PenjualanEntity data = session.get(
+                    PenjualanEntity.class, kodeLama
+            );
+
+            if (data == null) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Data penjualan tidak ditemukan."
+                );
+                muatData();
+                return;
             }
-        }
 
-        if (data == null) {
-            return;
-        }
+            JTextField kode = new JTextField(data.getKode());
+            JTextField tanggal = new JTextField(data.getTanggal());
+            JTextField kodeTopi = new JTextField(data.getKodeTopi());
+            JTextField namaPembeli = new JTextField(data.getNamaPembeli());
+            JTextField hargaJual = new JTextField(
+                    String.valueOf(data.getHargaJual())
+            );
 
-        JTextField kode = new JTextField(data.kode);
-        JTextField tanggal = new JTextField(data.tanggal);
-        JTextField kodeTopi = new JTextField(data.kodeTopi);
-        JTextField namaPembeli = new JTextField(data.namaPembeli);
-        JTextField hargaJual = new JTextField(
-                String.valueOf(data.hargaJual)
-        );
+            String[] metode = {"COD", "JNE"};
+            JComboBox<String> pilihanMetode = new JComboBox<>(metode);
+            pilihanMetode.setSelectedItem(data.getMetode());
 
-        String[] metode = {"COD", "JNE"};
-        JComboBox<String> pilihanMetode = new JComboBox<>(metode);
-        pilihanMetode.setSelectedItem(data.metode);
+            Object[] fields = {
+                "Kode Penjualan:", kode,
+                "Tanggal (YYYY-MM-DD):", tanggal,
+                "Kode Topi:", kodeTopi,
+                "Nama Pembeli:", namaPembeli,
+                "Harga Jual:", hargaJual,
+                "Metode Pembayaran:", pilihanMetode
+            };
 
-        Object[] fields = {
-            "Kode Penjualan:", kode,
-            "Tanggal (YYYY-MM-DD):", tanggal,
-            "Kode Topi:", kodeTopi,
-            "Nama Pembeli:", namaPembeli,
-            "Harga Jual:", hargaJual,
-            "Metode Pembayaran:", pilihanMetode
-        };
+            int hasil = JOptionPane.showConfirmDialog(
+                    this,
+                    fields,
+                    "Edit Penjualan",
+                    JOptionPane.OK_CANCEL_OPTION
+            );
 
-        int hasil = JOptionPane.showConfirmDialog(
-                this,
-                fields,
-                "Edit Penjualan",
-                JOptionPane.OK_CANCEL_OPTION
-        );
+            if (hasil != JOptionPane.OK_OPTION) {
+                return;
+            }
 
-        if (hasil != JOptionPane.OK_OPTION) {
-            return;
-        }
-
-        try {
             String k = kode.getText().trim();
             String t = tanggal.getText().trim();
             String kt = kodeTopi.getText().trim();
@@ -269,7 +325,8 @@ public class PenjualanFrame extends JPanel {
             String m = pilihanMetode.getSelectedItem().toString();
 
             if (k.isEmpty() || t.isEmpty() || kt.isEmpty()
-                    || np.isEmpty() || harga <= 0) {
+                    || np.isEmpty() || harga <= 0
+                    || !Double.isFinite(harga)) {
                 JOptionPane.showMessageDialog(
                         this,
                         "Semua data harus diisi dan harga harus lebih dari 0."
@@ -277,25 +334,83 @@ public class PenjualanFrame extends JPanel {
                 return;
             }
 
-            java.time.LocalDate.parse(t);
+            LocalDate.parse(t);
 
-            for (DataStore.Penjualan p : DataStore.daftarPenjualan) {
-                if (!p.kode.equals(kodeLama)
-                        && p.kode.equalsIgnoreCase(k)) {
+            Transaction transaction = null;
+
+            try {
+                transaction = session.beginTransaction();
+
+                // CEK KODE DUPLIKAT
+                Long jumlah = session.createQuery(
+                        "SELECT COUNT(p) FROM PenjualanEntity p "
+                        + "WHERE LOWER(p.kode) = LOWER(:kode) "
+                        + "AND p.kode <> :kodeLama",
+                        Long.class
+                )
+                .setParameter("kode", k)
+                .setParameter("kodeLama", kodeLama)
+                .getSingleResult();
+
+                if (jumlah > 0) {
+                    transaction.rollback();
                     JOptionPane.showMessageDialog(
                             this,
                             "Kode penjualan sudah digunakan."
                     );
                     return;
                 }
-            }
 
-            data.kode = k;
-            data.tanggal = t;
-            data.kodeTopi = kt;
-            data.namaPembeli = np;
-            data.hargaJual = harga;
-            data.metode = m;
+                // AMBIL DATA TOPI LAMA DAN BARU
+                TopiEntity topiLama = session.get(
+                        TopiEntity.class, data.getKodeTopi()
+                );
+
+                TopiEntity topiBaru = session.get(
+                        TopiEntity.class, kt
+                );
+
+                if (topiLama == null || topiBaru == null) {
+                    transaction.rollback();
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Data topi tidak ditemukan."
+                    );
+                    return;
+                }
+
+                // KEMBALIKAN STOK TOPI LAMA
+                topiLama.setStok(topiLama.getStok() + 1);
+
+                // CEK STOK TOPI BARU
+                if (topiBaru.getStok() <= 0) {
+                    transaction.rollback();
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Stok topi yang dipilih sudah habis."
+                    );
+                    return;
+                }
+
+                // KURANGI STOK TOPI BARU
+                topiBaru.setStok(topiBaru.getStok() - 1);
+
+                // PERBARUI DATA PENJUALAN
+                data.setKode(k);
+                data.setTanggal(t);
+                data.setKodeTopi(kt);
+                data.setNamaPembeli(np);
+                data.setHargaJual(harga);
+                data.setMetode(m);
+
+                session.merge(data);
+
+                transaction.commit();
+
+            } catch (Exception ex) {
+                rollback(transaction);
+                throw ex;
+            }
 
             muatData();
 
@@ -312,8 +427,14 @@ public class PenjualanFrame extends JPanel {
         } catch (java.time.DateTimeException ex) {
             JOptionPane.showMessageDialog(
                     this,
-                    "Tanggal tidak valid."
+                    "Tanggal tidak valid. Gunakan format YYYY-MM-DD."
             );
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal mengedit penjualan: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
@@ -338,10 +459,42 @@ public class PenjualanFrame extends JPanel {
                 JOptionPane.YES_NO_OPTION
         );
 
-        if (konfirmasi == JOptionPane.YES_OPTION) {
-            DataStore.daftarPenjualan.removeIf(
-                    p -> p.kode.equals(kode)
+        if (konfirmasi != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        Transaction transaction = null;
+
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
+            transaction = session.beginTransaction();
+
+            PenjualanEntity data = session.get(
+                    PenjualanEntity.class, kode
             );
+
+            if (data == null) {
+                transaction.rollback();
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Data penjualan tidak ditemukan."
+                );
+                muatData();
+                return;
+            }
+
+            // KEMBALIKAN STOK TOPI
+            TopiEntity topi = session.get(
+                    TopiEntity.class, data.getKodeTopi()
+            );
+
+            if (topi != null) {
+                topi.setStok(topi.getStok() + 1);
+            }
+
+            // HAPUS TRANSAKSI
+            session.remove(data);
+
+            transaction.commit();
 
             muatData();
 
@@ -349,6 +502,21 @@ public class PenjualanFrame extends JPanel {
                     this,
                     "Transaksi berhasil dihapus."
             );
+
+        } catch (Exception ex) {
+            rollback(transaction);
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal menghapus penjualan: " + ex.getMessage()
+            );
+            ex.printStackTrace();
+        }
+    }
+
+    // MEMBATALKAN TRANSAKSI JIKA TERJADI KESALAHAN
+    private void rollback(Transaction transaction) {
+        if (transaction != null && transaction.isActive()) {
+            transaction.rollback();
         }
     }
 }

@@ -1,10 +1,13 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
-import java.util.regex.Pattern;
+import java.util.List;
+
+import org.hibernate.Session;
 
 public class PersediaanFrame extends JPanel {
 
@@ -116,8 +119,6 @@ public class PersediaanFrame extends JPanel {
         sorter = new TableRowSorter<>(model);
         table.setRowSorter(sorter);
 
-        muatDataPersediaan();
-
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(
                 BorderFactory.createLineBorder(
@@ -162,6 +163,9 @@ public class PersediaanFrame extends JPanel {
         });
 
         kembaliButton.addActionListener(e -> this.onKembali.run());
+
+        // MEMUAT DATA DARI DATABASE
+        muatDataPersediaan();
     }
 
     // MEMBUAT KARTU RINGKASAN
@@ -191,30 +195,46 @@ public class PersediaanFrame extends JPanel {
         return card;
     }
 
-    // MEMUAT DATA TOPI DARI DATASTORE
+    // MEMUAT DATA TOPI DARI MYSQL
     public void muatDataPersediaan() {
         model.setRowCount(0);
 
-        for (DataStore.Topi topi : DataStore.daftarTopi) {
-            String status = topi.stok > 0
-                    ? "Tersedia"
-                    : "Stok Habis";
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
 
-            model.addRow(new Object[]{
-                topi.kode,
-                topi.merek,
-                topi.model,
-                topi.warna,
-                topi.kondisi,
-                topi.hargaModal,
-                topi.hargaJual,
-                topi.stok,
-                status
-            });
+            List<TopiEntity> daftarTopi = session.createQuery(
+                    "FROM TopiEntity ORDER BY kode",
+                    TopiEntity.class
+            ).getResultList();
+
+            for (TopiEntity topi : daftarTopi) {
+                String status = topi.getStok() > 0
+                        ? "Tersedia"
+                        : "Stok Habis";
+
+                model.addRow(new Object[]{
+                    topi.getKode(),
+                    topi.getMerek(),
+                    topi.getModel(),
+                    topi.getWarna(),
+                    topi.getKondisi(),
+                    topi.getHargaModal(),
+                    topi.getHargaJual(),
+                    topi.getStok(),
+                    status
+                });
+            }
+
+            perbaruiRingkasan(daftarTopi);
+
+            filterData();
+
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal memuat data persediaan: " + e.getMessage()
+            );
+            e.printStackTrace();
         }
-
-        perbaruiRingkasan();
-        filterData();
     }
 
     // PENCARIAN DAN FILTER
@@ -247,14 +267,14 @@ public class PersediaanFrame extends JPanel {
         });
     }
 
-    // MEMPERBARUI RINGKASAN
-    private void perbaruiRingkasan() {
-        int total = DataStore.daftarTopi.size();
+    // MEMPERBARUI RINGKASAN DARI DATA DATABASE
+    private void perbaruiRingkasan(List<TopiEntity> daftarTopi) {
+        int total = daftarTopi.size();
         int tersedia = 0;
         int stokHabis = 0;
 
-        for (DataStore.Topi topi : DataStore.daftarTopi) {
-            if (topi.stok > 0) {
+        for (TopiEntity topi : daftarTopi) {
+            if (topi.getStok() > 0) {
                 tersedia++;
             } else {
                 stokHabis++;

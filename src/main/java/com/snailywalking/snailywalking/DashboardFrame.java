@@ -1,3 +1,4 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
@@ -5,8 +6,11 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.text.NumberFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+
+import org.hibernate.Session;
 
 public class DashboardFrame extends JFrame {
 
@@ -355,37 +359,62 @@ public class DashboardFrame extends JFrame {
         return kartu;
     }
 
-    // Memperbarui data Dashboard berdasarkan DataStore
+    // Memperbarui data Dashboard berdasarkan database MySQL
     private void perbaruiDashboard() {
 
-        // Total stok dari seluruh data topi
-        int totalStok = DataStore.getTotalStok();
-        labelStok.setText(totalStok + " Topi");
+        try (Session session = HibernateUtil.getSessionFactory().openSession()) {
 
-        // Jumlah transaksi penjualan
-        int jumlahTerjual = DataStore.getJumlahTransaksiPenjualan();
-        labelTerjual.setText(jumlahTerjual + " Transaksi");
+            // Mengambil total stok seluruh topi
+            Number totalStok = (Number) session.createQuery(
+                    "SELECT COALESCE(SUM(t.stok), 0) FROM TopiEntity t"
+            ).uniqueResult();
 
-        // Total pendapatan penjualan
-        double totalPenjualan = DataStore.getTotalPenjualan();
-        labelTotalPenjualan.setText(
-                formatRupiah.format(totalPenjualan)
-        );
+            labelStok.setText(totalStok.intValue() + " Topi");
 
-        // Memperbarui tabel riwayat penjualan
-        modelRiwayat.setRowCount(0);
+            // Mengambil jumlah transaksi penjualan
+            Long jumlahTerjual = session.createQuery(
+                    "SELECT COUNT(p) FROM PenjualanEntity p",
+                    Long.class
+            ).uniqueResult();
 
-        for (int i = DataStore.daftarPenjualan.size() - 1; i >= 0; i--) {
-            DataStore.Penjualan p = DataStore.daftarPenjualan.get(i);
+            labelTerjual.setText(jumlahTerjual + " Transaksi");
 
-            modelRiwayat.addRow(new Object[]{
-                p.kode,
-                p.tanggal,
-                p.kodeTopi,
-                p.namaPembeli,
-                formatRupiah.format(p.hargaJual),
-                p.metode
-            });
+            // Mengambil total pendapatan penjualan
+            Number totalPenjualan = (Number) session.createQuery(
+                    "SELECT COALESCE(SUM(p.hargaJual), 0) FROM PenjualanEntity p"
+            ).uniqueResult();
+
+            labelTotalPenjualan.setText(
+                    formatRupiah.format(totalPenjualan.doubleValue())
+            );
+
+            // Mengambil riwayat penjualan terbaru
+            modelRiwayat.setRowCount(0);
+
+            List<PenjualanEntity> daftarPenjualan = session.createQuery(
+                    "FROM PenjualanEntity p ORDER BY p.tanggal DESC, p.kode DESC",
+                    PenjualanEntity.class
+            ).list();
+
+            for (PenjualanEntity p : daftarPenjualan) {
+                modelRiwayat.addRow(new Object[]{
+                    p.getKode(),
+                    p.getTanggal(),
+                    p.getKodeTopi(),
+                    p.getNamaPembeli(),
+                    formatRupiah.format(p.getHargaJual()),
+                    p.getMetode()
+                });
+            }
+
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal mengambil data Dashboard dari database:\n"
+                    + e.getMessage(),
+                    "Kesalahan Database",
+                    JOptionPane.ERROR_MESSAGE
+            );
         }
     }
 

@@ -1,3 +1,4 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
@@ -5,6 +6,9 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+
+import org.hibernate.Session;
+import org.hibernate.Transaction;
 
 public class PembelianFrame extends JPanel {
 
@@ -101,8 +105,6 @@ public class PembelianFrame extends JPanel {
         table.getColumnModel().getColumn(5).setPreferredWidth(120);
         table.getColumnModel().getColumn(6).setPreferredWidth(135);
 
-        muatDataPembelian();
-
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(
                 BorderFactory.createLineBorder(
@@ -134,6 +136,9 @@ public class PembelianFrame extends JPanel {
 
         mainPanel.add(centerPanel, BorderLayout.CENTER);
         add(mainPanel, BorderLayout.CENTER);
+
+        // MUAT DATA DARI DATABASE
+        muatDataPembelian();
 
         // TAMBAH PEMBELIAN
         tambahButton.addActionListener(e -> tambahPembelian());
@@ -167,6 +172,7 @@ public class PembelianFrame extends JPanel {
         kembaliButton.addActionListener(e -> this.onKembali.run());
     }
 
+    // TAMBAH PEMBELIAN
     private void tambahPembelian() {
         try {
             String kode = kodeField.getText().trim();
@@ -195,49 +201,94 @@ public class PembelianFrame extends JPanel {
                 return;
             }
 
-            // Pastikan kode pembelian belum digunakan.
-            for (DataStore.Pembelian p : DataStore.daftarPembelian) {
-                if (p.kode.equalsIgnoreCase(kode)) {
+            Math.multiplyExact((long) jumlah, harga);
+
+            Transaction transaction = null;
+
+            try (Session session = HibernateUtil
+                    .getSessionFactory().openSession()) {
+
+                transaction = session.beginTransaction();
+
+                // CEK KODE PEMBELIAN
+                PembelianEntity pembelianLama = session.get(
+                        PembelianEntity.class, kode
+                );
+
+                if (pembelianLama != null) {
+                    transaction.rollback();
                     tampilkanPesan("Kode pembelian sudah digunakan!");
                     return;
                 }
-            }
 
-            // Pastikan topi terdaftar.
-            DataStore.Topi topi = DataStore.cariTopi(kodeTopi);
-
-            if (topi == null) {
-                tampilkanPesan(
-                        "Kode topi tidak ditemukan! Periksa data pada menu Data Topi."
+                // CEK SUPPLIER
+                SupplierEntity dataSupplier = session.get(
+                        SupplierEntity.class, supplier
                 );
-                return;
+
+                if (dataSupplier == null) {
+                    transaction.rollback();
+                    tampilkanPesan("Kode supplier tidak ditemukan!");
+                    return;
+                }
+
+                // CEK TOPI
+                TopiEntity topi = session.get(
+                        TopiEntity.class, kodeTopi
+                );
+
+                if (topi == null) {
+                    transaction.rollback();
+                    tampilkanPesan(
+                            "Kode topi tidak ditemukan! Periksa menu Data Topi."
+                    );
+                    return;
+                }
+
+                // PERBARUI STOK
+                int stokBaru = Math.addExact(topi.getStok(), jumlah);
+                topi.setStok(stokBaru);
+
+                // SIMPAN TRANSAKSI
+                PembelianEntity pembelian = new PembelianEntity();
+                pembelian.setKode(kode);
+                pembelian.setTanggal(tanggal);
+                pembelian.setKodeSupplier(supplier);
+                pembelian.setKodeTopi(kodeTopi);
+                pembelian.setJumlah(jumlah);
+                pembelian.setHargaModal(harga);
+
+                session.persist(pembelian);
+
+                transaction.commit();
+
+                muatDataPembelian();
+                resetForm();
+
+                tampilkanPesan(
+                        "Pembelian berhasil ditambahkan dan stok topi diperbarui!"
+                );
             }
-
-            // Cegah nilai stok dan total melampaui batas integer/long.
-            int stokBaru = Math.addExact(topi.stok, jumlah);
-            long total = Math.multiplyExact((long) jumlah, harga);
-
-            DataStore.Pembelian pembelian = new DataStore.Pembelian(
-                    kode, tanggal, supplier, kodeTopi, jumlah, harga
-            );
-
-            DataStore.daftarPembelian.add(pembelian);
-            topi.stok = stokBaru;
-
-            muatDataPembelian();
-            resetForm();
-
-            tampilkanPesan("Pembelian berhasil ditambahkan dan stok topi diperbarui!");
 
         } catch (NumberFormatException ex) {
-            tampilkanPesan("Jumlah harus berupa bilangan bulat dan harga harus berupa angka.");
+            tampilkanPesan(
+                    "Jumlah harus berupa bilangan bulat dan harga harus berupa angka."
+            );
         } catch (DateTimeParseException ex) {
             tampilkanPesan("Format tanggal harus YYYY-MM-DD!");
         } catch (ArithmeticException ex) {
-            tampilkanPesan("Jumlah, stok, atau total pembelian terlalu besar!");
+            tampilkanPesan(
+                    "Jumlah, stok, atau total pembelian terlalu besar!"
+            );
+        } catch (Exception ex) {
+            tampilkanPesan(
+                    "Gagal menambahkan pembelian: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
+    // EDIT PEMBELIAN
     private void editPembelian() {
         int row = table.getSelectedRow();
 
@@ -263,8 +314,12 @@ public class PembelianFrame extends JPanel {
 
             LocalDate.parse(tanggal);
 
-            int jumlahBaru = Integer.parseInt(jumlahField.getText().trim());
-            long hargaBaru = Long.parseLong(hargaField.getText().trim());
+            int jumlahBaru = Integer.parseInt(
+                    jumlahField.getText().trim()
+            );
+            long hargaBaru = Long.parseLong(
+                    hargaField.getText().trim()
+            );
 
             if (jumlahBaru <= 0 || hargaBaru < 0) {
                 tampilkanPesan(
@@ -273,89 +328,139 @@ public class PembelianFrame extends JPanel {
                 return;
             }
 
-            DataStore.Pembelian pembelianLama = cariPembelian(kode);
+            Math.multiplyExact((long) jumlahBaru, hargaBaru);
 
-            if (pembelianLama == null) {
-                tampilkanPesan("Data pembelian tidak ditemukan di DataStore.");
-                return;
-            }
+            Transaction transaction = null;
 
-            DataStore.Topi topiLama =
-                    DataStore.cariTopi(pembelianLama.kodeTopi);
+            try (Session session = HibernateUtil
+                    .getSessionFactory().openSession()) {
 
-            DataStore.Topi topiBaru =
-                    DataStore.cariTopi(kodeTopiBaru);
+                transaction = session.beginTransaction();
 
-            if (topiLama == null || topiBaru == null) {
-                tampilkanPesan("Data topi tidak ditemukan. Periksa kode topi.");
-                return;
-            }
-
-            // Hitung perubahan stok sebelum mengubah data apa pun.
-            int stokLamaBaru;
-            int stokBaruBaru;
-
-            if (topiLama == topiBaru) {
-                stokLamaBaru = Math.addExact(
-                        topiLama.stok,
-                        jumlahBaru - pembelianLama.jumlah
+                PembelianEntity pembelian = session.get(
+                        PembelianEntity.class, kode
                 );
 
-                stokBaruBaru = stokLamaBaru;
-            } else {
-                stokLamaBaru = Math.subtractExact(
-                        topiLama.stok,
-                        pembelianLama.jumlah
+                if (pembelian == null) {
+                    transaction.rollback();
+                    tampilkanPesan("Data pembelian tidak ditemukan!");
+                    return;
+                }
+
+                // CEK SUPPLIER BARU
+                SupplierEntity supplierBaru = session.get(
+                        SupplierEntity.class, supplier
                 );
 
-                if (stokLamaBaru < 0) {
+                if (supplierBaru == null) {
+                    transaction.rollback();
+                    tampilkanPesan("Kode supplier tidak ditemukan!");
+                    return;
+                }
+
+                // AMBIL DATA TOPI LAMA DAN BARU
+                String kodeTopiLama = pembelian.getKodeTopi();
+
+                TopiEntity topiLama = session.get(
+                        TopiEntity.class, kodeTopiLama
+                );
+
+                TopiEntity topiBaru = session.get(
+                        TopiEntity.class, kodeTopiBaru
+                );
+
+                if (topiLama == null || topiBaru == null) {
+                    transaction.rollback();
                     tampilkanPesan(
-                            "Stok tidak cukup untuk mengubah pembelian ini. "
-                            + "Sebagian topi mungkin sudah terjual."
+                            "Data topi tidak ditemukan. Periksa kode topi."
                     );
                     return;
                 }
 
-                stokBaruBaru = Math.addExact(topiBaru.stok, jumlahBaru);
-            }
+                int jumlahLama = pembelian.getJumlah();
 
-            if (stokLamaBaru < 0) {
+                // HITUNG PERUBAHAN STOK
+                int stokLamaBaru;
+                int stokBaruBaru = 0;
+
+                if (kodeTopiLama.equalsIgnoreCase(kodeTopiBaru)) {
+
+                    stokLamaBaru = Math.addExact(
+                            Math.subtractExact(
+                                    topiLama.getStok(), jumlahLama
+                            ),
+                            jumlahBaru
+                    );
+
+                    if (stokLamaBaru < 0) {
+                        transaction.rollback();
+                        tampilkanPesan(
+                                "Perubahan ditolak karena stok topi tidak boleh minus."
+                        );
+                        return;
+                    }
+
+                    topiLama.setStok(stokLamaBaru);
+
+                } else {
+
+                    stokLamaBaru = Math.subtractExact(
+                            topiLama.getStok(), jumlahLama
+                    );
+
+                    if (stokLamaBaru < 0) {
+                        transaction.rollback();
+                        tampilkanPesan(
+                                "Stok topi lama tidak cukup untuk mengubah pembelian ini. "
+                                + "Kemungkinan sebagian topi sudah terjual."
+                        );
+                        return;
+                    }
+
+                    stokBaruBaru = Math.addExact(
+                            topiBaru.getStok(), jumlahBaru
+                    );
+
+                    topiLama.setStok(stokLamaBaru);
+                    topiBaru.setStok(stokBaruBaru);
+                }
+
+                // PERBARUI DATA PEMBELIAN
+                pembelian.setTanggal(tanggal);
+                pembelian.setKodeSupplier(supplier);
+                pembelian.setKodeTopi(kodeTopiBaru);
+                pembelian.setJumlah(jumlahBaru);
+                pembelian.setHargaModal(hargaBaru);
+
+                transaction.commit();
+
+                muatDataPembelian();
+                resetForm();
+
                 tampilkanPesan(
-                        "Perubahan ditolak karena stok topi tidak boleh minus."
+                        "Data pembelian berhasil diperbarui dan stok disesuaikan!"
                 );
-                return;
             }
-
-            Math.multiplyExact((long) jumlahBaru, hargaBaru);
-
-            // Terapkan perubahan stok.
-            topiLama.stok = stokLamaBaru;
-
-            if (topiLama != topiBaru) {
-                topiBaru.stok = stokBaruBaru;
-            }
-
-            // Perbarui data pembelian yang tersimpan.
-            pembelianLama.tanggal = tanggal;
-            pembelianLama.kodeSupplier = supplier;
-            pembelianLama.kodeTopi = kodeTopiBaru;
-            pembelianLama.jumlah = jumlahBaru;
-            pembelianLama.hargaModal = hargaBaru;
-
-            muatDataPembelian();
-            resetForm();
-
-            tampilkanPesan("Data pembelian berhasil diperbarui dan stok disesuaikan!");
 
         } catch (NumberFormatException ex) {
-            tampilkanPesan("Jumlah harus bilangan bulat dan harga harus berupa angka.");
+            tampilkanPesan(
+                    "Jumlah harus bilangan bulat dan harga harus berupa angka."
+            );
         } catch (DateTimeParseException ex) {
             tampilkanPesan("Format tanggal harus YYYY-MM-DD!");
         } catch (ArithmeticException ex) {
-            tampilkanPesan("Perhitungan stok atau total pembelian terlalu besar!");
+            tampilkanPesan(
+                    "Perhitungan stok atau total pembelian terlalu besar!"
+            );
+        } catch (Exception ex) {
+            tampilkanPesan(
+                    "Gagal mengedit pembelian: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
+    // HAPUS PEMBELIAN
     private void hapusPembelian() {
         int row = table.getSelectedRow();
 
@@ -365,72 +470,119 @@ public class PembelianFrame extends JPanel {
         }
 
         String kode = model.getValueAt(row, 0).toString();
-        DataStore.Pembelian pembelian = cariPembelian(kode);
-
-        if (pembelian == null) {
-            tampilkanPesan("Data pembelian tidak ditemukan.");
-            return;
-        }
-
-        DataStore.Topi topi = DataStore.cariTopi(pembelian.kodeTopi);
-
-        if (topi == null) {
-            tampilkanPesan("Data topi terkait tidak ditemukan.");
-            return;
-        }
-
-        if (topi.stok < pembelian.jumlah) {
-            tampilkanPesan(
-                    "Pembelian tidak dapat dihapus karena stok saat ini lebih sedikit "
-                    + "daripada jumlah pembelian. Kemungkinan sebagian topi sudah terjual."
-            );
-            return;
-        }
 
         int confirm = JOptionPane.showConfirmDialog(
                 this,
                 "Yakin ingin menghapus data pembelian ini?\n"
-                + "Stok topi akan dikurangi sebanyak " + pembelian.jumlah + ".",
+                + "Stok topi akan dikurangi sesuai jumlah pembelian.",
                 "Konfirmasi Hapus",
                 JOptionPane.YES_NO_OPTION
         );
 
-        if (confirm == JOptionPane.YES_OPTION) {
-            topi.stok -= pembelian.jumlah;
-            DataStore.daftarPembelian.remove(pembelian);
+        if (confirm != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        Transaction transaction = null;
+
+        try (Session session = HibernateUtil
+                .getSessionFactory().openSession()) {
+
+            transaction = session.beginTransaction();
+
+            PembelianEntity pembelian = session.get(
+                    PembelianEntity.class, kode
+            );
+
+            if (pembelian == null) {
+                transaction.rollback();
+                tampilkanPesan("Data pembelian tidak ditemukan!");
+                return;
+            }
+
+            TopiEntity topi = session.get(
+                    TopiEntity.class, pembelian.getKodeTopi()
+            );
+
+            if (topi == null) {
+                transaction.rollback();
+                tampilkanPesan("Data topi terkait tidak ditemukan!");
+                return;
+            }
+
+            if (topi.getStok() < pembelian.getJumlah()) {
+                transaction.rollback();
+                tampilkanPesan(
+                        "Pembelian tidak dapat dihapus karena stok saat ini "
+                        + "lebih sedikit daripada jumlah pembelian. "
+                        + "Kemungkinan sebagian topi sudah terjual."
+                );
+                return;
+            }
+
+            // KURANGI STOK
+            topi.setStok(
+                    topi.getStok() - pembelian.getJumlah()
+            );
+
+            // HAPUS TRANSAKSI
+            session.remove(pembelian);
+
+            transaction.commit();
 
             muatDataPembelian();
             resetForm();
 
-            tampilkanPesan("Data pembelian berhasil dihapus dan stok disesuaikan!");
-        }
-    }
+            tampilkanPesan(
+                    "Data pembelian berhasil dihapus dan stok disesuaikan!"
+            );
 
-    private DataStore.Pembelian cariPembelian(String kode) {
-        for (DataStore.Pembelian p : DataStore.daftarPembelian) {
-            if (p.kode.equalsIgnoreCase(kode)) {
-                return p;
+        } catch (Exception ex) {
+            if (transaction != null && transaction.isActive()) {
+                transaction.rollback();
             }
+
+            tampilkanPesan(
+                    "Gagal menghapus pembelian: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
-        return null;
     }
 
+    // MEMUAT DATA DARI DATABASE
     private void muatDataPembelian() {
         model.setRowCount(0);
 
-        for (DataStore.Pembelian p : DataStore.daftarPembelian) {
-            model.addRow(new Object[]{
-                p.kode,
-                p.tanggal,
-                p.kodeSupplier,
-                p.kodeTopi,
-                p.jumlah,
-                p.hargaModal,
-                p.getTotal()
-            });
+        try (Session session = HibernateUtil
+                .getSessionFactory().openSession()) {
+
+            java.util.List<PembelianEntity> daftarPembelian =
+                    session.createQuery(
+                            "FROM PembelianEntity ORDER BY kode",
+                            PembelianEntity.class
+                    ).getResultList();
+
+            for (PembelianEntity p : daftarPembelian) {
+                model.addRow(new Object[]{
+                    p.getKode(),
+                    p.getTanggal(),
+                    p.getKodeSupplier(),
+                    p.getKodeTopi(),
+                    p.getJumlah(),
+                    p.getHargaModal(),
+                    p.getTotal()
+                });
+            }
+
+        } catch (Exception ex) {
+            tampilkanPesan(
+                    "Gagal memuat data pembelian: " + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
+    // RESET FORM
     private void resetForm() {
         kodeField.setText("");
         tanggalField.setText(LocalDate.now().toString());
@@ -443,6 +595,7 @@ public class PembelianFrame extends JPanel {
         table.clearSelection();
     }
 
+    // MENAMPILKAN PESAN
     private void tampilkanPesan(String pesan) {
         JOptionPane.showMessageDialog(this, pesan);
     }

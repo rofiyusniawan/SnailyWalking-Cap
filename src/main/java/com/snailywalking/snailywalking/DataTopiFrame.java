@@ -1,8 +1,12 @@
+
 package com.snailywalking.snailywalking;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+
+import org.hibernate.Session;
+import org.hibernate.Transaction;
 
 public class DataTopiFrame extends JPanel {
 
@@ -115,7 +119,7 @@ public class DataTopiFrame extends JPanel {
         mainPanel.add(centerPanel, BorderLayout.CENTER);
         add(mainPanel, BorderLayout.CENTER);
 
-        // MUAT DATA DARI DATASTORE
+        // MUAT DATA DARI DATABASE
         muatDataTopi();
 
         // TAMBAH DATA
@@ -158,20 +162,34 @@ public class DataTopiFrame extends JPanel {
                     return;
                 }
 
-                if (DataStore.cariTopi(kode) != null) {
-                    JOptionPane.showMessageDialog(
-                            this,
-                            "Kode topi sudah digunakan!"
-                    );
-                    return;
-                }
+                Transaction transaction = null;
 
-                DataStore.daftarTopi.add(
-                        new DataStore.Topi(
-                                kode, merek, namaModel, warna,
-                                kondisi, modal, jual, stok
-                        )
-                );
+                try (Session session = HibernateUtil
+                        .getSessionFactory().openSession()) {
+
+                    transaction = session.beginTransaction();
+
+                    TopiEntity topiLama = session.get(
+                            TopiEntity.class, kode
+                    );
+
+                    if (topiLama != null) {
+                        transaction.rollback();
+
+                        JOptionPane.showMessageDialog(
+                                this, "Kode topi sudah digunakan!"
+                        );
+                        return;
+                    }
+
+                    TopiEntity topi = new TopiEntity(
+                            kode, merek, namaModel, warna,
+                            kondisi, modal, jual, stok
+                    );
+
+                    session.persist(topi);
+                    transaction.commit();
+                }
 
                 muatDataTopi();
                 resetForm();
@@ -185,6 +203,12 @@ public class DataTopiFrame extends JPanel {
                         this,
                         "Harga harus berupa angka dan stok harus berupa bilangan bulat!"
                 );
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Gagal menambahkan data topi: " + ex.getMessage()
+                );
+                ex.printStackTrace();
             }
         });
 
@@ -221,9 +245,6 @@ public class DataTopiFrame extends JPanel {
                 );
 
                 kodeField.setEditable(false);
-
-                // Stok nantinya dikelola melalui transaksi.
-                // Untuk saat ini, stok bisa diedit langsung.
                 stokField.setEditable(true);
             }
         });
@@ -277,22 +298,36 @@ public class DataTopiFrame extends JPanel {
                     return;
                 }
 
-                DataStore.Topi topi = DataStore.cariTopi(kode);
+                Transaction transaction = null;
 
-                if (topi == null) {
-                    JOptionPane.showMessageDialog(
-                            this, "Data topi tidak ditemukan!"
+                try (Session session = HibernateUtil
+                        .getSessionFactory().openSession()) {
+
+                    transaction = session.beginTransaction();
+
+                    TopiEntity topi = session.get(
+                            TopiEntity.class, kode
                     );
-                    return;
-                }
 
-                topi.merek = merek;
-                topi.model = namaModel;
-                topi.warna = warna;
-                topi.kondisi = kondisi;
-                topi.hargaModal = modal;
-                topi.hargaJual = jual;
-                topi.stok = stok;
+                    if (topi == null) {
+                        transaction.rollback();
+
+                        JOptionPane.showMessageDialog(
+                                this, "Data topi tidak ditemukan!"
+                        );
+                        return;
+                    }
+
+                    topi.setMerek(merek);
+                    topi.setModel(namaModel);
+                    topi.setWarna(warna);
+                    topi.setKondisi(kondisi);
+                    topi.setHargaModal(modal);
+                    topi.setHargaJual(jual);
+                    topi.setStok(stok);
+
+                    transaction.commit();
+                }
 
                 muatDataTopi();
                 resetForm();
@@ -306,6 +341,12 @@ public class DataTopiFrame extends JPanel {
                         this,
                         "Harga harus berupa angka dan stok harus berupa bilangan bulat!"
                 );
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Gagal mengedit data topi: " + ex.getMessage()
+                );
+                ex.printStackTrace();
             }
         });
 
@@ -323,31 +364,6 @@ public class DataTopiFrame extends JPanel {
 
             String kode = model.getValueAt(row, 0).toString();
 
-            // Cegah penghapusan jika topi digunakan dalam transaksi.
-            boolean digunakan = false;
-
-            for (DataStore.Pembelian p : DataStore.daftarPembelian) {
-                if (p.kodeTopi.equalsIgnoreCase(kode)) {
-                    digunakan = true;
-                    break;
-                }
-            }
-
-            for (DataStore.Penjualan p : DataStore.daftarPenjualan) {
-                if (p.kodeTopi.equalsIgnoreCase(kode)) {
-                    digunakan = true;
-                    break;
-                }
-            }
-
-            if (digunakan) {
-                JOptionPane.showMessageDialog(
-                        this,
-                        "Data topi tidak bisa dihapus karena sudah digunakan dalam transaksi!"
-                );
-                return;
-            }
-
             int confirm = JOptionPane.showConfirmDialog(
                     this,
                     "Yakin ingin menghapus data topi ini?",
@@ -355,10 +371,54 @@ public class DataTopiFrame extends JPanel {
                     JOptionPane.YES_NO_OPTION
             );
 
-            if (confirm == JOptionPane.YES_OPTION) {
-                DataStore.daftarTopi.removeIf(
-                        t -> t.kode.equalsIgnoreCase(kode)
+            if (confirm != JOptionPane.YES_OPTION) {
+                return;
+            }
+
+            Transaction transaction = null;
+
+            try (Session session = HibernateUtil
+                    .getSessionFactory().openSession()) {
+
+                transaction = session.beginTransaction();
+
+                Long jumlahPembelian = session.createQuery(
+                        "SELECT COUNT(p) FROM PembelianEntity p "
+                        + "WHERE p.kodeTopi = :kode",
+                        Long.class
+                ).setParameter("kode", kode).getSingleResult();
+
+                Long jumlahPenjualan = session.createQuery(
+                        "SELECT COUNT(p) FROM PenjualanEntity p "
+                        + "WHERE p.kodeTopi = :kode",
+                        Long.class
+                ).setParameter("kode", kode).getSingleResult();
+
+                if (jumlahPembelian > 0 || jumlahPenjualan > 0) {
+                    transaction.rollback();
+
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Data topi tidak bisa dihapus karena sudah digunakan dalam transaksi!"
+                    );
+                    return;
+                }
+
+                TopiEntity topi = session.get(
+                        TopiEntity.class, kode
                 );
+
+                if (topi == null) {
+                    transaction.rollback();
+
+                    JOptionPane.showMessageDialog(
+                            this, "Data topi tidak ditemukan!"
+                    );
+                    return;
+                }
+
+                session.remove(topi);
+                transaction.commit();
 
                 muatDataTopi();
                 resetForm();
@@ -366,6 +426,17 @@ public class DataTopiFrame extends JPanel {
                 JOptionPane.showMessageDialog(
                         this, "Data topi berhasil dihapus!"
                 );
+
+            } catch (Exception ex) {
+                if (transaction != null && transaction.isActive()) {
+                    transaction.rollback();
+                }
+
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Gagal menghapus data topi: " + ex.getMessage()
+                );
+                ex.printStackTrace();
             }
         });
 
@@ -376,22 +447,39 @@ public class DataTopiFrame extends JPanel {
         );
     }
 
-    // MEMUAT DATA DARI DATASTORE KE TABEL
+    // MEMUAT DATA DARI DATABASE KE TABEL
     public void muatDataTopi() {
         model.setRowCount(0);
 
-        for (DataStore.Topi topi : DataStore.daftarTopi) {
-            model.addRow(new Object[]{
-                topi.kode,
-                topi.merek,
-                topi.model,
-                topi.warna,
-                topi.kondisi,
-                topi.hargaModal,
-                topi.hargaJual,
-                topi.stok,
-                topi.getStatus()
-            });
+        try (Session session = HibernateUtil
+                .getSessionFactory().openSession()) {
+
+            java.util.List<TopiEntity> daftarTopi = session.createQuery(
+                    "FROM TopiEntity ORDER BY kode",
+                    TopiEntity.class
+            ).getResultList();
+
+            for (TopiEntity topi : daftarTopi) {
+                model.addRow(new Object[]{
+                    topi.getKode(),
+                    topi.getMerek(),
+                    topi.getModel(),
+                    topi.getWarna(),
+                    topi.getKondisi(),
+                    topi.getHargaModal(),
+                    topi.getHargaJual(),
+                    topi.getStok(),
+                    topi.getStatus()
+                });
+            }
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Gagal memuat data topi dari database: "
+                    + ex.getMessage()
+            );
+            ex.printStackTrace();
         }
     }
 
