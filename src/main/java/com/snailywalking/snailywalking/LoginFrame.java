@@ -3,10 +3,15 @@ package com.snailywalking.snailywalking;
 
 import javax.swing.*;
 import java.awt.*;
+import org.springframework.context.ApplicationContext;
 
 public class LoginFrame extends JFrame {
 
-    public LoginFrame() {
+    private final ApplicationContext context;
+
+    public LoginFrame(ApplicationContext context) {
+        this.context = context;
+
         setTitle("Login - Snaily Walking Cap");
         setSize(420, 350);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -51,27 +56,25 @@ public class LoginFrame extends JFrame {
             String username = usernameField.getText();
             String password = new String(passwordField.getPassword());
 
-            
-        if (username.equals("admin") && password.equals("123")) {
-        JOptionPane.showMessageDialog(this,
-        "Login berhasil! Selamat datang, Admin.");
+            if (username.equals("admin") && password.equals("123")) {
 
-        dispose();
-        new DashboardFrame().setVisible(true);
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Login berhasil! Selamat datang, Admin."
+                );
 
-        } else {
-        JOptionPane.showMessageDialog(this,
-        "Username atau password salah!");
-        }
+                dispose();
+                new DashboardFrame(context).setVisible(true);
 
+            } else {
+
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Username atau password salah!"
+                );
+            }
         });
 
         add(panel);
-    }
-
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            new LoginFrame().setVisible(true);
-        });
     }
 }

@@ -1,6 +1,7 @@
 
 package com.snailywalking.snailywalking;
 
+import com.snailywalking.snailywalking.model.PenjualanEntity;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;

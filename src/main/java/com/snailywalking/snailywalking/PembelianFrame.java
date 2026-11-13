@@ -1,6 +1,9 @@
 
 package com.snailywalking.snailywalking;
 
+import com.snailywalking.snailywalking.model.SupplierEntity;
+import com.snailywalking.snailywalking.model.TopiEntity;
+import com.snailywalking.snailywalking.model.PembelianEntity;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;

@@ -1,6 +1,7 @@
 
 package com.snailywalking.snailywalking;
 
+import com.snailywalking.snailywalking.model.PenjualanEntity;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -11,8 +12,11 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.hibernate.Session;
+import org.springframework.context.ApplicationContext;
 
 public class DashboardFrame extends JFrame {
+
+    private final ApplicationContext context;
 
     private final Color dark = new Color(30, 35, 45);
     private final Color background = new Color(245, 247, 250);
@@ -32,7 +36,9 @@ public class DashboardFrame extends JFrame {
     private final NumberFormat formatRupiah =
             NumberFormat.getCurrencyInstance(new Locale("id", "ID"));
 
-    public DashboardFrame() {
+    public DashboardFrame(ApplicationContext context) {
+        this.context = context;
+
         setTitle("Dashboard - Snaily Walking Cap");
         setSize(1100, 700);
         setMinimumSize(new Dimension(900, 600));
@@ -121,7 +127,7 @@ public class DashboardFrame extends JFrame {
 
             if (pilihan == JOptionPane.YES_OPTION) {
                 dispose();
-                new LoginFrame().setVisible(true);
+                new LoginFrame(context).setVisible(true);
             }
         });
 
@@ -364,14 +370,12 @@ public class DashboardFrame extends JFrame {
 
         try (Session session = HibernateUtil.getSessionFactory().openSession()) {
 
-            // Mengambil total stok seluruh topi
             Number totalStok = (Number) session.createQuery(
                     "SELECT COALESCE(SUM(t.stok), 0) FROM TopiEntity t"
             ).uniqueResult();
 
             labelStok.setText(totalStok.intValue() + " Topi");
 
-            // Mengambil jumlah transaksi penjualan
             Long jumlahTerjual = session.createQuery(
                     "SELECT COUNT(p) FROM PenjualanEntity p",
                     Long.class
@@ -379,7 +383,6 @@ public class DashboardFrame extends JFrame {
 
             labelTerjual.setText(jumlahTerjual + " Transaksi");
 
-            // Mengambil total pendapatan penjualan
             Number totalPenjualan = (Number) session.createQuery(
                     "SELECT COALESCE(SUM(p.hargaJual), 0) FROM PenjualanEntity p"
             ).uniqueResult();
@@ -388,7 +391,6 @@ public class DashboardFrame extends JFrame {
                     formatRupiah.format(totalPenjualan.doubleValue())
             );
 
-            // Mengambil riwayat penjualan terbaru
             modelRiwayat.setRowCount(0);
 
             List<PenjualanEntity> daftarPenjualan = session.createQuery(
@@ -466,11 +468,5 @@ public class DashboardFrame extends JFrame {
                 button.setFont(new Font("SansSerif", Font.PLAIN, 14));
             }
         }
-    }
-
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            new DashboardFrame().setVisible(true);
-        });
     }
 }

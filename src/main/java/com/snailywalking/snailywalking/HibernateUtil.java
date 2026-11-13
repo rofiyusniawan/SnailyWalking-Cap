@@ -1,5 +1,9 @@
 package com.snailywalking.snailywalking;
 
+import com.snailywalking.snailywalking.model.PenjualanEntity;
+import com.snailywalking.snailywalking.model.SupplierEntity;
+import com.snailywalking.snailywalking.model.TopiEntity;
+import com.snailywalking.snailywalking.model.PembelianEntity;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Configuration;
 

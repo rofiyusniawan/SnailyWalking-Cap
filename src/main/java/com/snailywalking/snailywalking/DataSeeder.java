@@ -1,5 +1,8 @@
 package com.snailywalking.snailywalking;
 
+import com.snailywalking.snailywalking.model.PenjualanEntity;
+import com.snailywalking.snailywalking.model.TopiEntity;
+import com.snailywalking.snailywalking.model.PembelianEntity;
 import org.hibernate.Session;
 import org.hibernate.Transaction;
 
